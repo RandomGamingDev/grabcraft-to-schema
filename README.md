@@ -6,6 +6,9 @@ The library itself is `grabcraft_to_schema.py` <br/>
 
 Certain blocks can't be easily converted with `auto_block_map()` which is why I used `raw-blockmap.csv` which is the file from https://github.com/gbl/GrabcraftLitematic/blob/master/blockmap.csv, but renamed, and which you can now convert into a form that can be usable by the library but running `clean_blockmap.py` which I got `blockmap.csv` from.
 
+## Some Current Limitations:
+Due to me not having the time to sort through all the weird naming used by grabcraft and due to the weird formatting schemes for both grabcraft and Minecraft the nbt (block rotation, whether or not things are lit, etc.) data isn't currently preserved and of course there's no guarantee that all grabcraft builds will work. 99% will work, however it's possible that some weird formatting on grabcraft's part will cause certain builds to not work.
+
 ## Documentation:
 - `block_map`: The loaded custom blockmap overloads from `blockmap.csv`
 - `load_block_map(file_name)`: The function that's used for loading the blockmap csv
