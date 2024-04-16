@@ -17,6 +17,8 @@ Due to me not having the time to sort through all the weird naming used by grabc
 - `load_block_map(file_name)`: The function that's used for loading the blockmap csv
 - `auto_block_map(grabcraft_block) -> String: schema_block`: The function that's used for automatically mapping blocks over when they aren't in the `block_map`
 - `RenderObject`: A class for storing all relevant `RenderObject` data (`.obj`: The JS file containing the main data, `.name`: The build name, `.dims`: \[x, y, z\] list containing dimensions, `.tags`: the description tags)
-- `render_object_to_schema(render_object) -> litematic`: This converts a `RenderObject` to a litematic schema
+- `render_object_to_schema(render_object) -> litematic`: This converts a `RenderObject` to a litematic schem
+- `render_object_to_png_slice(render_object) -> litematic`: This converts
 - `url_to_render_object_data(url) -> RenderObject`: This converts a url to a grabcraft build to a `RenderObject`
+- `url_to_png_slice(url) -> PIL.Image`: This converts a url to a png slice.
 - `url_to_schema(url) -> litematic`: This converts a url to a litematic schema
