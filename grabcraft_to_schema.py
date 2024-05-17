@@ -78,7 +78,7 @@ def render_object_to_png_slice(render_object):
                     block = block[block.find(':') + 1:]
                     block_color = bam.get_block_avg_color(block)
 
-                    if isinstance(block_color, np.ndarray):
+                    if isinstance(block_color, np.ndarray) and block_loc[0] < width and block_loc[1] < height and block_loc[2] < length:
                         block_color = tuple(block_color.astype(dtype=np.int64))
                         pixel_map[block_loc[1] * width + block_loc[0], block_loc[2]] = block_color
 
