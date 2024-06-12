@@ -17,7 +17,7 @@ match input("Would you like to save it as\n\t(1) A litematica schematic\n\t(2) R
     case "1": # Litematica
         schem = gts.render_object_to_schema(schem)
         # Save the schem as litematica
-        schem.save(f"{ input('Enter what you want to name the litematic: ') }.litematica")
+        schem.save(f"{ input('Enter what you want to name the litematic: ') }.litematic")
     case "2": # RenderObject
         # Save the schem as render object json
         with open(f"{ input('Enter what you want to name the Render Object: ') }.json", 'w') as f:

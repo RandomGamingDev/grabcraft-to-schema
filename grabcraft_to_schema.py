@@ -84,6 +84,19 @@ def render_object_to_png_slice(render_object):
 
         return image
 
+# A SIGNIFICANT AMOUNT OF DATA IS LOST AND SOME BLOCKS MIGHT BE SUBSTITUED FOR OTHER BLOCKS WITH THE SAME COLOR
+def png_slice_to_schema(png_slice, dims):
+    reg = Region(0, 0, 0, dims[0], dims[1], dims[2])
+    schem = reg.as_schematic(name="idk", author="rgd", description="test")
+    width, height = png_slice.size
+    for x in range(width):
+        for y in range(height):
+            block_loc = (x % dims[0], x // dims[0], y)
+            block = BlockState(f"minecraft:{ bam.get_closest_colored_block(png_slice.getpixel((x, y)))[0] }")
+
+            reg.setblock(block_loc[0], block_loc[1], block_loc[2], block)
+    return schem
+
 def render_object_to_schema(render_object):
     # Get the part of the javascript containing the JSON
     ro_text = render_object.obj[render_object.obj.find('{'):]
