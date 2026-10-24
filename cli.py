@@ -1,28 +1,58 @@
-import grabcraft_to_schema as gts
-import blockmodel_avg_mapper as bam
-import json
-import PIL
-from PIL import Image
-import numpy as np
+import sys, json, argparse
+from collections import defaultdict
+from grabcraft_to_schema import RenderObject
 
-# Load the block map
-gts.load_block_map("blockmap.csv")
+parser = argparse.ArgumentParser(prog='cli', description="Download a blueprint from GrabCraft and convert it to a schematic in litematica format")
+parser.add_argument('--version', action='version', version='%(prog)s v1.00')
+parser.add_argument('url', help="URL of the blueprint's page on GrabCraft website")
+parser.add_argument('-f', choices= ['north', 'south', 'east', 'west'],
+                          default = 'north',
+                          help="side of the original build facing the bottom of the GrabCraft blueprint")
+parser.add_argument('-d', action='store_true',
+                          help="dump the contents of the webpage and RenderObject json to a file")
 
-# A demo link that you can try to use:
-# "https://www.grabcraft.com/minecraft/gothic-medieval-church/churches#model3d"
-schem = gts.url_to_render_object_data(input("Enter the link to the build: "))
-print("Done downloading!\n")
+args = parser.parse_args()
 
-match input("Would you like to save it as\n\t(1) A litematica schematic\n\t(2) RenderObject json\n\t(3) PNG slice\n"):
-    case "1": # Litematica
-        schem = gts.render_object_to_schema(schem)
-        # Save the schem as litematica
-        schem.save(f"{ input('Enter what you want to name the litematic: ') }.litematic")
-    case "2": # RenderObject
-        # Save the schem as render object json
-        with open(f"{ input('Enter what you want to name the Render Object: ') }.json", 'w') as f:
-            f.write(json.dumps(schem.__dict__))
-    case "3": # PNG slice
-        gts.render_object_to_png_slice(schem).save(f"{ input('Enter what you want to name the png slice: ') }.png")
-    case _:
-        print("That's an invalid option!")
+
+# Download render object
+print("-> Downloading...")
+robj = RenderObject(args.url, north=args.f, dump=args.d)
+
+# Convert render object to MC schema
+print("-> Converting...")
+schem, materials_list = robj.to_schema()
+if robj.block_map.updated > 0:
+    print(f"Blockmap updated: {robj.block_map.updated}")
+    robj.block_map.save("blockmap_new.csv")
+
+# Save the schema as litematica
+print("-> Saving...")
+out_name = robj.name.replace(" ", "_").replace(":", "_").replace("/", "_").replace("&amp;", "_")
+schem.save(out_name + ".litematic")
+
+# Save the schema statistics
+with open(out_name + ".info", "w") as f:
+    print(" -= info =-", file=f)
+    print("Name:", robj.name, file=f)
+    print("Author:", robj.author, file=f)
+    print("URL:", robj.url, file=f)
+    print("Facing:", robj.north, file=f)
+    print("Dimensions:", robj.dims, file=f)
+    print("Tags:", robj.tags, file=f)
+    print("Blocks:", len(robj.blocks), file=f)
+
+    print(" -= blocks =-", file=f)
+    blocks_list = defaultdict(int)
+    for block in robj.blocks:
+        blocks_list[(block[1], block[0])] += 1
+    for block in sorted(blocks_list):
+        print(f"{blocks_list[block]:6d}", block, file=f)
+
+    print(" -= materials =-", file=f)
+    for material in sorted(materials_list):
+        print(f"{materials_list[material]:6d}", material, file=f)
+
+# show basic info
+print("Name:", robj.name)
+print("Dimensions:", robj.dims)
+print("Blocks:", len(robj.blocks))

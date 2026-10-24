@@ -1,185 +1,251 @@
-import requests
-import shutil
-import os
+import csv, requests, json, re
+from collections import defaultdict
 from litemapy import Schematic, Region, BlockState
-import json
-import csv
-import PIL
-from PIL import Image
-import blockmodel_avg_mapper as bam
-import numpy as np
 
-block_map = {}
+class BlockMap:
+    def __init__(self, file="blockmap.csv"):
+        self.updated = 0
+        # Load the block map of known blocks
+        self.block_map = {}
+        self.block_list = []
+        with open(file, 'r', newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                key = (int(row[0]), row[1].strip())
+                self.block_map[key] = row[2:]
+                self.block_list.append(key)
 
-# Load the block map of predefined blocks
-def load_block_map(file_name):
-    global block_map
+    def __call__(self, block_id, block_name):
+        key = (block_id, block_name)
+        val = self.block_map.get(key)
+        if val is None:
+            key1 = (-1, block_name)
+            val = self.block_map.pop(key1, None)
+            if val is not None:
+                idx = self.block_list.index(key1)
+                self.block_list[idx] = key
+            else:
+                val = [BlockMap.guess(block_name)]
+                self.block_list.append(key)
 
-    with open(file_name, 'r') as f:
-        reader = csv.reader(f)
-        i = 0
-        for row in reader:
-            i += 1
-            if i == 0:
-                continue
-            block_map[row[1]] = row[2:]
+            self.block_map[key] = val
+            self.updated += 1
 
-# Automatically map grabcraft blocks to schema blocks
-def auto_block_map(grabcraft_block):
-    # Set the schema_block to grabcraft_block so that it's ready for later transformations
-    schema_block = grabcraft_block
-    # Remove the parenthesis
-    parenthesis_loc = schema_block.find(" (")
-    if parenthesis_loc != -1:
-        schema_block = schema_block[:parenthesis_loc]
-    # Make all of the characters lowercase like in vanilla Minecraft block codes
-    schema_block = schema_block.lower()
-    # Removed all prepended spaces
-    schema_block = schema_block.strip()
-    # Replace all spaces with _ like in vanilla Minecraft block codes
-    schema_block = schema_block.replace(' ', '_')
-    # Replace some weird formatting regarding wood items
-    schema_block = schema_block.replace("_wood_", '_')
-    # Replace some weird formatting regarding wall mounted items
-    schema_block = schema_block.replace("wall-mounted_", '')
+        props = dict(zip(val[1::2], val[2::2]))
+        return val[0], props
 
-    return f"minecraft:{ schema_block }"
+    def save(self, filename):
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            for key in self.block_list:
+                val =  self.block_map[key]
+                writer.writerow([key[0], key[1]] + val)
 
-def grabcraft_block_to_block(grabcraft_block):
-    global block_map
+    # Automatically map grabcraft blocks to schema blocks
+    @staticmethod
+    def guess(grabcraft_block):
+        def drop_state(b):
+            parenthesis_loc = b.find(" (")
+            if parenthesis_loc != -1:
+                b = b[:parenthesis_loc]
+            return b
 
-    return block_map[grabcraft_block][0] if grabcraft_block in block_map else auto_block_map(grabcraft_block)
+        # Set the schema_block to grabcraft_block so that it's ready for later transformations
+        schema_block = grabcraft_block
+        # Remove the parenthesis
+        schema_block = drop_state(schema_block)
+        # Make all of the characters lowercase like in vanilla Minecraft block codes
+        schema_block = schema_block.lower()
+        # Removed all prepended spaces
+        schema_block = schema_block.strip()
+        # Replace all spaces with _ like in vanilla Minecraft block codes
+        schema_block = schema_block.replace(' ', '_')
+        # Replace some weird formatting regarding wood items
+        schema_block = schema_block.replace("_wood_", '_')
+        # Replace some weird formatting regarding wall mounted items
+        schema_block = schema_block.replace("wall-mounted_", '')
+
+        return f"minecraft:{ schema_block }"
+
+
+def get_renderobject_old(page):
+    # The index for the renderObject's info
+    render_object_i = page.find("myRenderObject")
+    # The end index for getting the renderObject's string
+    render_object_e = page.find('"', render_object_i)
+    # Store the url to the render object
+    render_object_url = "https://www.grabcraft.com/js/RenderObject/" + page[render_object_i:render_object_e]
+    # Download render object's javascript
+    ro_js = requests.get(render_object_url).text
+#     with open("dump_RenderObject.txt", "w", encoding="utf8") as f:
+#         f.write(ro_js)
+    # Get the part of the javascript containing the JSON
+    ro_text = ro_js[ro_js.find('{'):]
+    # Convert it to a json
+    return json.loads(ro_text)
+
+
+def get_renderobject(page):
+    fetch_list = re.findall(r'fetch\("(.+)"\)', page)
+    if not fetch_list:
+        print("RenderObject's fetch URL not found")
+        exit()
+    render_object_url = fetch_list[0]
+    # print(render_object_url)
+
+    # Download render object's data
+    res = requests.get(render_object_url)
+
+    if not res.ok:
+        print(res.status_code)
+#         print(res.encoding, res.apparent_encoding)
+#         print(res.headers)
+        exit()
+
+    # Convert it to a json
+    return json.loads(res.text)
+
 
 class RenderObject:
-    def __init__(self, obj, name, dims, tags):
-        self.obj = obj 
-        self.name = name
-        self.dims = dims
-        self.tags = tags
+    def __init__(self, url, north='north', block_map=None, dump=False):
+        self.block_map = block_map or BlockMap()
+        self.url = url[:url.find('#')] + "#general"
+        self.north = north.lower()
 
-def render_object_to_png_slice(render_object):
-        width, height, length = render_object.dims
-        # Create an image of the proper size (each slice is x & z which each slice having a different y)
-        # The slices are stored on one image and are stored horizontally from one another
-        image = Image.new(mode="RGBA", size=(width * height, length))
-        pixel_map = image.load()
+        # Getting the webpage itself
+        page = requests.get(self.url).text
+        if (dump):
+            with open("dump_page.html", "w", encoding='utf-8') as f:
+                f.write(page)
 
-        # Get the part of the javascript containing the JSON
-        ro_text = render_object.obj[render_object.obj.find('{'):]
-        # Convert it to a json
-        ro_json = json.loads(ro_text)
+        # Get the index for the name
+        name_i = page.find("content-title")
+        name_i = page.find(">", name_i) + 1
+        # Get the end index for the name
+        name_e = page.find("<", name_i)
+        # Get the name
+        self.name = page[name_i:name_e].strip()
 
-        for x, yz in ro_json.items():
-            for y, z in yz.items():
-                for _, data in z.items():
-                    block_loc = (int(data['x']) - 1, int(data['y']) - 1, int(data['z']) - 1)
-                    grabcraft_block = data["name"]
-                    block = grabcraft_block_to_block(grabcraft_block)
-                    block = block[block.find(':') + 1:]
-                    block_color = bam.get_block_avg_color(block)
+        # Get the author
+        author_list = re.findall(r'Author:&nbsp;(.+)<br', page)
+        self.author = author_list[0] if author_list else "n/a"
 
-                    if isinstance(block_color, np.ndarray) and block_loc[0] < width and block_loc[1] < height and block_loc[2] < length:
-                        block_color = tuple(block_color.astype(dtype=np.int64))
-                        pixel_map[block_loc[1] * width + block_loc[0], block_loc[2]] = block_color
+        # Get the index for the table containing the dimensions and tags
+        table_i = page.find("object_properties")
+        # Get the metadata
+        rows = ("Width", "Height", "Depth", "Tags")
+        meta = []
+        for row in rows:
+            # Get the row
+            row_i = page.find(row, table_i)
+            # Get the index for the value
+            value_i = page.find('>', page.find("value", row_i)) + 1
+            # Get the end index for the value
+            value_e = page.find('<', value_i)
+            # Get the value
+            val = page[value_i:value_e]
+            # If the value is a list split it to represent it as such
+            if val.isdigit():
+                val = int(val)
+            elif val.find(", ") != -1:
+                val = val.split(", ")
+            # Add the values to the values list
+            meta.append(val)
+        self.tags = tuple(meta.pop())
+        self.dims = tuple(meta)
 
-        return image
+#         ro_json = get_renderobject_old(page)
+        ro_json = get_renderobject(page)
+        if dump:
+            with open("dump_RenderObject.json", "w") as f:
+                json.dump(ro_json, f, sort_keys=True, indent=4)
 
-# A SIGNIFICANT AMOUNT OF DATA IS LOST AND SOME BLOCKS MIGHT BE SUBSTITUED FOR OTHER BLOCKS WITH THE SAME COLOR
-def png_slice_to_schema(png_slice, dims):
-    reg = Region(0, 0, 0, dims[0], dims[1], dims[2])
-    schem = reg.as_schematic(name="idk", author="rgd", description="test")
-    width, height = png_slice.size
-    for x in range(width):
-        for y in range(height):
-            block_loc = (x % dims[0], x // dims[0], y)
-            block = BlockState(f"minecraft:{ bam.get_closest_colored_block(png_slice.getpixel((x, y)))[0] }")
+        # Unpack json into a flat list of blocks
+        def json_iter(tree):
+            for x, yz in tree.items():
+                for y, z in yz.items():
+                    for _, data in z.items():
+                        yield data
+        self.blocks = [(int(d['mat_id']), d["name"].strip(), int(d['x']), int(d['y']), int(d['z'])) for d in json_iter(ro_json)]
 
-            reg.setblock(block_loc[0], block_loc[1], block_loc[2], block)
-    return schem
+        # verify build's dimensions
+        max_x = max(d[2] for d in self.blocks)
+        max_y = max(d[3] for d in self.blocks)
+        max_z = max(d[4] for d in self.blocks)
+        max_dims = max_x, max_y, max_z
+        if self.dims != max_dims:
+            print("Dimensions updated:", self.dims, "->", max_dims)
+            self.dims = max_dims
 
-def render_object_to_schema(render_object):
-    # Get the part of the javascript containing the JSON
-    ro_text = render_object.obj[render_object.obj.find('{'):]
-    # Convert it to a json
-    ro_json = json.loads(ro_text)
+    def map_xz(self, x, z):
+        match self.north:
+            case "north":
+                return x - 1, z - 1
+            case "south":
+                return self.dims[0] - x, self.dims[2] - z
+            case "east":
+                return self.dims[2] - z, x - 1
+            case "west":
+                return z - 1, self.dims[0] - x
+            case _:
+                exit(f"invalid north: '{north}'")
 
-    # Store the dimensions
-    dims = render_object.dims
-    # Create the schema
-    reg = Region(0, 0, 0, dims[0], dims[1], dims[2])
-    schem = reg.as_schematic(name="idk", author="rgd", description="test")
-    # Move the blocks from the render object to the region
-    for x, yz in ro_json.items():
-        for y, z in yz.items():
-            for _, data in z.items():
-                block_loc = (int(data['x']) - 1, int(data['y']) - 1, int(data['z']) - 1)
-                grabcraft_block = data["name"]
-                schema_block = grabcraft_block_to_block(grabcraft_block)
-                block = BlockState(schema_block)  # get the attributes
-                reg.setblock(block_loc[0], block_loc[1], block_loc[2], block)
-    return schem
+    def map_dims(self):
+        match self.north:
+            case "north" | "south":
+                return self.dims
+            case "east" | "west":
+                return self.dims[::-1]
+            case _:
+                exit(f"invalid north: '{north}'")
 
-# Get the url to the render object from the webpage for the build
-def url_to_render_object_data(url):
-    # Getting the webpage itself
-    res = requests.get(url[:url.find('#')] + "#general").text
+    def to_schema(self):
+        # Store the dimensions
+        dims = self.map_dims()
+        # Create the schema
+        reg = Region(0, 0, 0, dims[0], dims[1], dims[2])
+        schem = reg.as_schematic(name=self.name, author=self.author, description=self.url)
 
-    # The index for the renderObject's info
-    render_object_i = res.find("myRenderObject")
-    # The end index for getting the renderObject's string
-    render_object_e = res.find('"', render_object_i)
-    # Store the url to the render object
-    render_object_url = "https://www.grabcraft.com/js/RenderObject/" + res[render_object_i:render_object_e]
+        mat_list = defaultdict(int)
 
-    # Get the index for the name
-    name_i = res.find("content-title")
-    name_i = res.find(">", name_i) + 1
-    # Get the end index for the name
-    name_e = res.find("<", name_i)
-    # Get the name
-    name = res[name_i:name_e]
+        # Fill the region with blocks
+        for gc_id, gc_name, gc_x, gc_y, gc_z in self.blocks:
+            schema_y = gc_y - 1
+            schema_x, schema_z = self.map_xz(gc_x, gc_z)
 
-    # Get the index for the table containing the dimensions and tags
-    table_i = res.find("object_properties")
-    # Get the metadata
-    rows = ("Width", "Height", "Depth", "Tags")
-    meta = []
-    for row in rows:
-        # Get the row
-        row_i = res.find(row, table_i)
-        # Get the index for the value
-        value_i = res.find('>', res.find("value", row_i)) + 1
-        # Get the end index for the value
-        value_e = res.find('<', value_i)
-        # Get the value
-        val = res[value_i:value_e]
-        # If the value is a list split it to represent it as such
-        if val.isdigit():
-            val = int(val)
-        elif val.find(", ") != -1:
-            val = val.split(", ")
-        # Add the values to the values list
-        meta.append(val)
-    tags = tuple(meta.pop())
-    dims = tuple(meta)
+            schema_block, schema_props = self.block_map(gc_id, gc_name)
+            block = BlockState(schema_block, **schema_props)
+            reg.setblock(schema_x, schema_y, schema_z, block)
 
-    return RenderObject(requests.get(render_object_url).text, name, dims, tags)
+            mat_list[schema_block[schema_block.find(":")+1:]] += 1
 
-# Convert the url to a png slice
-def url_to_png_slice(url):
-    # Get the render object, its dimensions, the tags, the name, and the data itself from the url
-    render_object = url_to_render_object_data(url)
+        # Fix for 2-tall blocks
+        for x, y, z in reg.block_positions():
+            b = reg.getblock(x, y, z)
 
-    return render_object_to_png_slice(render_object) # Generate the png slice with the data we gathered
+            # propagate properties of each door's half to its other half
+            if re.match("^minecraft:.+_door$", b.id):
+                props = dict(b.properties())
+                half = props.pop("half")
+                y_pair = y + 1 if half == "lower" else y - 1
+                b_pair = reg.getblock(x, y_pair, z)
+                if b.id == b_pair.id:
+                    reg.setblock(x, y_pair, z, b_pair.with_properties(**props))
+                else:
+                    print(f"Door block mismatch: {b.id} -> {b_pair.id}")
 
-# Convert the url to a schema file
-def url_to_schema(url):
-    # Get the render object, its dimensions, the tags, the name, and the data itself from the url
-    render_object = url_to_render_object_data(url)
+            # upper half of 2-tall plants is mostly wrong; overwrite it with lower half
+            plant_id = ["minecraft:large_fern",
+                        "minecraft:tall_grass",
+                        "minecraft:lilac",
+                        "minecraft:peony",
+                        "minecraft:pitcher_plant",
+                        "minecraft:rose_bush",
+                        "minecraft:sunflower"]
+            if b.id in plant_id:
+                props = dict(b.properties())
+                if props["half"] == "lower":
+                    reg.setblock(x, y + 1, z, b.with_properties(half="upper"))
 
-    return render_object_to_schema(render_object) # Generate the litematica schematica with the data we gathered
+        return schem, mat_list
 
-#load_block_map("blockmap.csv")
-#schem = url_to_schema("https://www.grabcraft.com/minecraft/gothic-medieval-church/churches#model3d")
-# Save the schema
-#schem.save("test.litematic")

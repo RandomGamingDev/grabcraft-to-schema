@@ -1,2 +1,6 @@
-.venv
+*.bak
+*.orig
+\!
+*.litematic
+*.info
 __pycache__
